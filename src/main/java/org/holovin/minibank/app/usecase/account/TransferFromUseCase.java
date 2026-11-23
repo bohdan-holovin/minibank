@@ -1,0 +1,48 @@
+package org.holovin.minibank.app.usecase.account;
+
+import lombok.RequiredArgsConstructor;
+import org.holovin.minibank.app.port.in.TransferFromInPort;
+import org.holovin.minibank.app.service.AccountService;
+import org.holovin.minibank.app.service.IdempotencyService;
+import org.holovin.minibank.domain.model.Transaction;
+import org.holovin.minibank.shared.dto.request.account.AccountTransferRequestDto;
+import org.holovin.minibank.shared.dto.response.transaction.TransactionResponseDto;
+import org.holovin.minibank.shared.mapper.TransactionMapper;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+@RequiredArgsConstructor
+public class TransferFromUseCase implements TransferFromInPort {
+
+    private final IdempotencyService idempotencyService;
+    private final AccountService accountService;
+
+    @Transactional
+    @Retryable(
+            retryFor = {CannotAcquireLockException.class},
+            maxAttempts = 2,
+            backoff = @Backoff(delay = 100)
+    )
+    public TransactionResponseDto execute(AccountTransferRequestDto request) {
+
+        var uuid = request.getUuid();
+        var amount = request.getAmount();
+
+        var existingTransaction = idempotencyService.checkOrGetExisting(uuid, amount, Transaction.Type.TRANSFER);
+        if (existingTransaction != null) return TransactionMapper.toTransactionDto(existingTransaction);
+
+        var fromAccount = accountService.findByNumberWithBalance(request.getFromAccountNumber());
+        var toAccount = accountService.findByNumberWithBalance(request.getToAccountNumber());
+
+        try {
+            var transaction = fromAccount.transferTo(toAccount, amount, uuid);
+            return TransactionMapper.toTransactionDto(transaction);
+        } catch (Exception e) {
+            throw new RuntimeException("An unexpected error occurred while processing transfer: " + e.getMessage(), e);
+        }
+    }
+}

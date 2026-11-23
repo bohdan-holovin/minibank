@@ -9,10 +9,10 @@
         <relativePath/>
     </parent>
     <groupId>org.holovin</groupId>
-    <artifactId>privatbank_demo</artifactId>
+    <artifactId>minibank</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>privatbank_demo</name>
-    <description>privatbank_demo</description>
+    <name>MiniBank</name>
+    <description>Banking backend for accounts, asynchronous transactions and balance snapshots</description>
     <url/>
     <licenses>
         <license/>

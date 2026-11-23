@@ -1,0 +1,124 @@
+package org.holovin.minibank.domain.model;
+
+import jakarta.persistence.*;
+import lombok.*;
+import org.holovin.minibank.domain.exception.InsufficientFundsException;
+import org.holovin.minibank.domain.model.base.AbstractAuditable;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "transactions")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@EqualsAndHashCode(callSuper = true)
+public class Transaction extends AbstractAuditable {
+
+    private String uuid;
+    private BigDecimal amount;
+
+    private LocalDateTime processedAt;
+
+    @Enumerated(EnumType.STRING)
+    private Status status;
+
+    @Enumerated(EnumType.STRING)
+    private Type type;
+
+    private String failureReason;
+
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
+    @ManyToOne(fetch = FetchType.LAZY, cascade = {CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REFRESH})
+    @JoinColumn(name = "from_account_id")
+    private Account fromAccount;
+
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
+    @ManyToOne(fetch = FetchType.LAZY, cascade = {CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REFRESH})
+    @JoinColumn(name = "to_account_id")
+    private Account toAccount;
+
+    public static Transaction createTopUp(String uuid, BigDecimal amount, Account toAccount) {
+        var tx = new Transaction();
+        tx.setUuid(uuid);
+        tx.setAmount(amount);
+        tx.setProcessedAt(null);
+        tx.setType(Type.TOP_UP);
+        tx.setStatus(Status.PENDING);
+        tx.setToAccount(toAccount);
+        return tx;
+    }
+
+    public static Transaction createTransfer(String uuid, BigDecimal amount, Account fromAccount, Account toAccount) {
+        var tx = new Transaction();
+        tx.setUuid(uuid);
+        tx.setAmount(amount);
+        tx.setProcessedAt(null);
+        tx.setType(Type.TRANSFER);
+        tx.setStatus(Status.PENDING);
+        tx.setFromAccount(fromAccount);
+        tx.setToAccount(toAccount);
+        return tx;
+    }
+
+    public static Transaction createWithdraw(String uuid, BigDecimal amount, Account fromAccount) {
+        var tx = new Transaction();
+        tx.setUuid(uuid);
+        tx.setAmount(amount);
+        tx.setProcessedAt(null);
+        tx.setType(Type.WITHDRAW);
+        tx.setStatus(Status.PENDING);
+        tx.setFromAccount(fromAccount);
+        return tx;
+    }
+
+    public void process() {
+        this.status = Status.PROCESSING;
+
+        try {
+            if (isDebitOperation()) {
+                fromAccount.getCurrentBalance().reserveFunds(amount);
+            }
+
+            switch (type) {
+                case TRANSFER -> {
+                    fromAccount.getCurrentBalance().commitDebit(amount, this);
+                    toAccount.getCurrentBalance().commitCredit(amount, this);
+                }
+                case WITHDRAW -> fromAccount.getCurrentBalance().commitDebit(amount, this);
+                case TOP_UP -> toAccount.getCurrentBalance().commitCredit(amount, this);
+            }
+
+            this.status = Status.COMPLETED;
+            this.processedAt = LocalDateTime.now();
+
+        } catch (InsufficientFundsException e) {
+            this.status = Status.FAILED;
+            this.failureReason = "Insufficient funds";
+        } catch (Exception e) {
+            this.status = Status.FAILED;
+            var message = e.getMessage();
+            this.failureReason = "Processing error: " +
+                    (message != null ? message.substring(0, Math.min(100, message.length())) : "");
+        }
+    }
+
+    public boolean isSameOperation(BigDecimal amount, Type type) {
+        return this.amount.compareTo(amount) == 0 && this.type == type;
+    }
+
+    private boolean isDebitOperation() {
+        return type == Type.TRANSFER || type == Type.WITHDRAW;
+    }
+
+    public enum Type {
+        TOP_UP, TRANSFER, WITHDRAW
+    }
+
+    public enum Status {
+        PENDING, PROCESSING, COMPLETED, FAILED
+    }
+}
